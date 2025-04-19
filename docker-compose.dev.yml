@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: tourist-expert-backend-dev
+    volumes:
+      - ./backend:/app
+    ports:
+      - "5656:5656"
+    environment:
+      - FLASK_ENV=development
+      - SHEET_ID=${SHEET_ID:-1Pxl4hiuPvVcCBXIakqzsBzO9IYpo635ZbHfHsdj1c5Y}
+      - GID=${GID:-1095660313}
+      - PORT=5656
+      - ADMIN_KEY=${ADMIN_KEY:-admin-secret}
+      - PYTHONUNBUFFERED=1
+      - VITE_API_URL=http://localhost:3636/api
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: tourist-expert-frontend-dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3636:5173"
+    environment:
+      - REACT_APP_API_URL=http://localhost:5656/api
+      - CHOKIDAR_USEPOLLING=true
+      - WDS_SOCKET_PORT=3636
+    depends_on:
+      - backend
+    restart: unless-stopped

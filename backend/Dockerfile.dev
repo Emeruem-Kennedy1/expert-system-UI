@@ -1,0 +1,23 @@
+FROM python:3.9-slim
+
+# Install SWI-Prolog and other dependencies
+RUN apt-get update && apt-get install -y \
+    swi-prolog \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variable for PySwip
+ENV PYTHONUNBUFFERED=1
+ENV SWIPL_HOME=/usr/lib/swi-prolog
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Development mode - we'll mount the code as a volume
+CMD ["python", "app.py"]

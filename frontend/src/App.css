@@ -1,0 +1,111 @@
+@import 'antd/dist/reset.css';
+
+/* Layout Components */
+.layout {
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+}
+
+.content {
+  padding: 24px;
+  background: #f0f2f5;
+}
+
+.content-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.footer {
+  text-align: center;
+}
+
+/* Loading State */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 0;
+}
+
+.loading-container p {
+  margin-top: 16px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* Question Component */
+.question-card {
+  margin-bottom: 24px;
+}
+
+.progress-container {
+  margin-bottom: 24px;
+}
+
+.progress-container .ant-progress {
+  margin-bottom: 8px;
+}
+
+.question-title {
+  margin-bottom: 24px !important;
+}
+
+.options-grid {
+  margin-bottom: 24px;
+}
+
+.option-button {
+  height: auto !important;
+  padding: 12px !important;
+  white-space: normal !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.navigation-buttons {
+  display: flex;
+  justify-content: flex-start;
+}
+
+/* Recommendations Component */
+.recommendations-card {
+  margin-bottom: 24px;
+}
+
+.preferences-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.preferences-tags .ant-tag {
+  padding: 4px 8px;
+  margin-right: 0;
+}
+
+.reset-button-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 576px) {
+  .header {
+    padding: 0 12px;
+  }
+
+  .content {
+    padding: 12px;
+  }
+}
