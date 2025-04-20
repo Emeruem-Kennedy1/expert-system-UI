@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Layout, Typography, Spin, Alert } from "antd";
+import { Layout, Typography, Spin, Alert, message } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import "./App.css";
 import QuestionComponent from "./components/QuestionComponent";
@@ -15,6 +15,19 @@ import {
 const { Header, Content, Footer } = Layout;
 const { Title } = Typography;
 
+// Define the fixed question order to match the TUI version
+const QUESTION_ORDER = [
+  "attraction_type",
+  "budget",
+  "time_available",
+  "distance_from_residence",
+  "indoor_outdoor",
+  "popularity",
+  "physical_activity",
+  "time_of_day",
+  "accessibility",
+];
+
 const App = () => {
   // State variables
   const [sessionId, setSessionId] = useState(null);
@@ -22,9 +35,10 @@ const App = () => {
   const [error, setError] = useState(null);
   const [askableOptions, setAskableOptions] = useState({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [attributes, setAttributes] = useState([]);
+  const [orderedAttributes, setOrderedAttributes] = useState([]);
   const [preferences, setPreferences] = useState({});
   const [recommendations, setRecommendations] = useState(null);
+  const [noMatchesFound, setNoMatchesFound] = useState(false);
 
   // Initialize session and get options on component mount
   useEffect(() => {
@@ -40,14 +54,16 @@ const App = () => {
         const optionsResponse = await getOptions();
         setAskableOptions(optionsResponse);
 
-        // Create array of attributes to ask
-        const attrs = Object.keys(optionsResponse);
-        setAttributes(attrs);
+        // Create ordered array of attributes based on TUI order
+        const orderedAttrs = QUESTION_ORDER.filter(
+          (attr) => optionsResponse[attr] !== undefined
+        );
+        setOrderedAttributes(orderedAttrs);
 
         setLoading(false);
       } catch (err) {
         setError(
-          "Failed to initialize expert system. Please refresh the page."
+          "Failed to initialize recommendation system. Please refresh the page."
         );
         setLoading(false);
         console.error(err);
@@ -61,6 +77,7 @@ const App = () => {
   const handleSelect = async (attribute, value) => {
     try {
       setLoading(true);
+      setNoMatchesFound(false);
 
       // Set the preference on the server
       await setPreference(sessionId, attribute, value);
@@ -72,14 +89,25 @@ const App = () => {
       };
       setPreferences(updatedPreferences);
 
-      // Move to next question or get recommendations if done
-      if (currentQuestionIndex < attributes.length - 1) {
-        setCurrentQuestionIndex(currentQuestionIndex + 1);
-      } else {
-        // Get recommendations if all questions answered
-        const recommendationsResponse = await getRecommendations(sessionId);
-        console.log(recommendationsResponse);
+      // Check recommendations after each selection to mimic TUI behavior
+      const recommendationsResponse = await getRecommendations(sessionId);
+
+      // If we have no results but have more questions, show the "no matches" state
+      if (
+        (!recommendationsResponse.recommendations ||
+          recommendationsResponse.recommendations.length === 0) &&
+        currentQuestionIndex < orderedAttributes.length - 1
+      ) {
+        setNoMatchesFound(true);
+        setRecommendations([]);
+      }
+      // If we're at the last question or have results, show recommendations
+      else if (currentQuestionIndex >= orderedAttributes.length - 1) {
         setRecommendations(recommendationsResponse.recommendations || []);
+      }
+      // Otherwise proceed to next question
+      else {
+        setCurrentQuestionIndex(currentQuestionIndex + 1);
       }
 
       setLoading(false);
@@ -91,14 +119,33 @@ const App = () => {
   };
 
   // Handle going back to previous question
-  const handlePrevious = () => {
+  const handlePrevious = async () => {
     if (currentQuestionIndex > 0) {
+      setLoading(true);
+      setNoMatchesFound(false);
+
+      // Go back one question
       setCurrentQuestionIndex(currentQuestionIndex - 1);
 
       // Remove the preference for the current question
-      const currentAttribute = attributes[currentQuestionIndex];
+      const currentAttribute = orderedAttributes[currentQuestionIndex];
       const { [currentAttribute]: _, ...remainingPreferences } = preferences;
       setPreferences(remainingPreferences);
+
+      try {
+        // Reset session to previous state
+        await resetSession(sessionId);
+
+        // Re-apply all previous preferences
+        for (const [attr, value] of Object.entries(remainingPreferences)) {
+          await setPreference(sessionId, attr, value);
+        }
+      } catch (err) {
+        console.error("Error resetting preferences:", err);
+        message.error("Error going back to previous question");
+      }
+
+      setLoading(false);
     }
   };
 
@@ -106,6 +153,7 @@ const App = () => {
   const handleReset = async () => {
     try {
       setLoading(true);
+      setNoMatchesFound(false);
 
       if (sessionId) {
         await resetSession(sessionId);
@@ -130,7 +178,7 @@ const App = () => {
     <Layout className="layout">
       <Header className="header">
         <Title level={3} style={{ color: "white", margin: 0 }}>
-          Tourist Attraction Recommendation System
+          San Francisco Attractions Recommender
         </Title>
       </Header>
 
@@ -143,16 +191,36 @@ const App = () => {
             </div>
           ) : error ? (
             <Alert message="Error" description={error} type="error" showIcon />
+          ) : noMatchesFound ? (
+            // Show no matches message
+            <Alert
+              message="No Matching Attractions"
+              description="No attractions found that match all your preferences. Consider broadening some of your preferences and try again."
+              type="warning"
+              showIcon
+              action={
+                <div style={{ marginTop: "10px" }}>
+                  <button
+                    onClick={handleReset}
+                    className="ant-btn ant-btn-primary"
+                  >
+                    Start Over
+                  </button>
+                </div>
+              }
+            />
           ) : !recommendations ? (
             // Show question if not all questions answered
-            attributes.length > 0 && (
+            orderedAttributes.length > 0 && (
               <QuestionComponent
-                currentAttribute={attributes[currentQuestionIndex]}
-                options={askableOptions[attributes[currentQuestionIndex]] || []}
+                currentAttribute={orderedAttributes[currentQuestionIndex]}
+                options={
+                  askableOptions[orderedAttributes[currentQuestionIndex]] || []
+                }
                 handleSelect={handleSelect}
                 handlePrevious={handlePrevious}
                 questionNumber={currentQuestionIndex + 1}
-                totalQuestions={attributes.length}
+                totalQuestions={orderedAttributes.length}
               />
             )
           ) : (
@@ -167,7 +235,7 @@ const App = () => {
       </Content>
 
       <Footer className="footer">
-        Expert System Recommendation Engine ©{new Date().getFullYear()}
+        Tourist Attraction Recommendation System ©{new Date().getFullYear()}
       </Footer>
     </Layout>
   );

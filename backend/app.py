@@ -6,7 +6,7 @@ import requests
 import csv
 import io
 import logging
-from pyswip import Prolog, Functor, Atom, call # noqa
+from pyswip import Prolog, Functor, Atom, call  # noqa
 from functools import wraps
 
 # Configure logging
@@ -148,7 +148,7 @@ def prolog_atom(s):
     )
 
 
-# ===== Generate Prolog facts from sheet rows (handle multi-valued Best Time & 'both') =====
+# ===== Generate Prolog facts from sheet rows (with list handling for multi-valued fields) =====
 def generate_facts(rows):
     required_columns = [
         "Attraction Name",
@@ -170,11 +170,15 @@ def generate_facts(rows):
         raise FactGenerationError("No data rows found in the spreadsheet")
 
     # Validate columns
-    if not all(col in rows[0] for col in required_columns):
-        missing = [col for col in required_columns if col not in rows[0]]
+    missing_required = [col for col in required_columns if col not in rows[0]]
+    if missing_required:
         raise FactGenerationError(
-            f"Missing columns in spreadsheet: {', '.join(missing)}"
+            f"Missing required columns in spreadsheet: {', '.join(missing_required)}"
         )
+
+    # Check for optional columns
+    has_description = "Description" in rows[0]
+    has_link = "Link" in rows[0]
 
     for i, row in enumerate(rows):
         try:
@@ -187,27 +191,47 @@ def generate_facts(rows):
             budget = prolog_atom(row["Budget"])
             time_avail = prolog_atom(row["Time Needed"])
             distance = prolog_atom(row["Distance from Residence"])
-            io_raw = row["Indoor/Outdoor"].strip().lower()
-            # map 'both' to 'either'
-            io_field = "either" if io_raw in ("both", "either") else prolog_atom(io_raw)
+
+            # Handle Indoor/Outdoor as list
+            io_values = [
+                prolog_atom(v.strip())
+                for v in row["Indoor/Outdoor"].split(",")
+                if v.strip()
+            ]
+            if "both" in io_values:
+                io_values = ["indoor", "outdoor"]
+            io_list = "[" + ",".join(f"'{v}'" for v in io_values) + "]"
+
             popularity = prolog_atom(row["Popularity"])
             activity = prolog_atom(row["Physical Activity"])
-            access = prolog_atom(row["Accessibility"])
-            # split multi-valued Best Time
-            best_times = [t.strip() for t in row["Best Time"].split(",") if t.strip()]
 
-            # Use default if no best times provided
+            # Handle Best Time as list
+            best_times = [
+                prolog_atom(t.strip()) for t in row["Best Time"].split(",") if t.strip()
+            ]
             if not best_times:
                 logger.warning(
                     f"Row {i+1}: No best times specified for {name}, using 'any'"
                 )
                 best_times = ["any"]
+            best_times_list = "[" + ",".join(f"'{t}'" for t in best_times) + "]"
 
-            for bt in best_times:
-                time_of_day = prolog_atom(bt)
-                facts.append(
-                    f"attraction({name}, {type_}, {budget}, {time_avail}, {distance}, {io_field}, {popularity}, {activity}, {time_of_day}, {access})."
-                )
+            access = prolog_atom(row["Accessibility"])
+
+            # Process description and link if available
+            description = ""
+            if has_description:
+                description = row.get("Description", "").replace("'", "''")
+
+            link = ""
+            if has_link:
+                link = row.get("Link", "").replace("'", "''")
+
+            facts.append(
+                f"attraction('{name}', '{type_}', '{budget}', '{time_avail}', "
+                f"'{distance}', {io_list}, '{popularity}', '{activity}', "
+                f"{best_times_list}, '{access}', '{description}', '{link}')."
+            )
         except KeyError as e:
             logger.error(f"Missing column in row {i+1}: {e}")
             raise FactGenerationError(f"Missing data in row {i+1}: {str(e)}")
@@ -250,9 +274,7 @@ sessions = {}
 class Session:
     def __init__(self):
         try:
-            self.prolog = (
-                None  # Initialize Prolog in load_knowledge_base to avoid nested queries
-            )
+            self.prolog = None
             self.user_preferences = {}
             self.kb_loaded = False
             self.load_knowledge_base()
@@ -275,34 +297,31 @@ class Session:
             facts_str = generate_facts(rows)
             logger.info("Successfully generated Prolog facts")
 
-            # Fix syntax errors by ensuring proper formatting in Prolog code
-            # Replace any problematic characters in the facts
-            facts_str = facts_str.replace("'", "''")  # Escape single quotes in Prolog
-
-            # Build KB with proper Prolog syntax (careful with commas and periods)
+            # Build KB with proper Prolog syntax
             KB = """
 :- dynamic known/3.
 :- dynamic multivalued/1.
-:- dynamic attraction/10.
-:- discontiguous attraction/10.
+:- dynamic attraction/12.
+:- discontiguous attraction/12.
 
-% Declare that time_of_day can be multivalued
+% Declare that time_of_day and indoor_outdoor can be multivalued
 multivalued(time_of_day).
+multivalued(indoor_outdoor).
 
 % Facts imported from Google Sheet
 {}
 
-% Recommendation rule based on askables
+% Recommendation rule based on askables with member check for lists
 recommend(X) :-
-    attraction(X, Type, Budget, TimeAvail, Distance, IO, Pop, Activity, TimeOfDay, Access),
+    attraction(X, Type, Budget, TimeAvail, Distance, IO, Pop, Activity, TimeOfDay, Access, _, _),
     match_or_no_preference(attraction_type, Type),
     match_or_no_preference(budget, Budget),
     match_or_no_preference(time_available, TimeAvail),
     match_or_no_preference(distance_from_residence, Distance),
-    match_or_no_preference(indoor_outdoor, IO),
+    member(IOVal, IO), match_or_no_preference(indoor_outdoor, IOVal),
     match_or_no_preference(popularity, Pop),
     match_or_no_preference(physical_activity, Activity),
-    match_or_no_preference(time_of_day, TimeOfDay),
+    member(TimeVal, TimeOfDay), match_or_no_preference(time_of_day, TimeVal),
     match_or_no_preference(accessibility, Access).
 
 % Match if preference matches value or no preference set
@@ -322,9 +341,7 @@ show_known.
             with os.fdopen(fd, "w") as f:
                 f.write(KB)
 
-            # Use a try-finally block to ensure queries are closed
             try:
-                # Make sure we use the right query pattern
                 self.prolog.consult(path)
                 self.kb_loaded = True
                 logger.info("Successfully loaded knowledge base")
@@ -351,67 +368,120 @@ show_known.
             # Store the preference
             self.user_preferences[attribute] = value
 
-            # Use a safer approach with direct Prolog querying
-            try:
+            # Special handling for 'either' in indoor_outdoor
+            if attribute == "indoor_outdoor" and value == "either":
                 # First retract any existing knowledge about this attribute
                 retract_query = f"retractall(known(_, {attribute}, _))."
                 list(self.prolog.query(retract_query))
 
-                # Then assert the new knowledge
-                assert_query = f"assertz(known(yes, {attribute}, {value}))."
+                # For 'either', accept both indoor and outdoor
+                assert_query = f"assertz(known(yes, {attribute}, 'indoor'))."
                 list(self.prolog.query(assert_query))
-
-                # For debugging - log all known preferences
-                try:
-                    debug_query = self.prolog.query("show_known.")
-                    list(debug_query)
-                    debug_query.close()
-                except Exception as debug_e:
-                    logger.warning(f"Debug query failed: {debug_e}")
-
-                logger.info(f"Set preference {attribute}={value}")
+                assert_query = f"assertz(known(yes, {attribute}, 'outdoor'))."
+                list(self.prolog.query(assert_query))
                 return True
-            except Exception as e:
-                logger.error(f"Error in Prolog query: {e}")
-                raise PrologQueryError(f"Failed to set preference: {str(e)}")
+            # Special handling for limited_accessibility in accessibility
+            elif attribute == "accessibility" and value == "limited_accessibility":
+                # First retract any existing knowledge about this attribute
+                retract_query = f"retractall(known(_, {attribute}, _))."
+                list(self.prolog.query(retract_query))
+
+                # Also accept wheelchair_accessible locations
+                assert_query = f"assertz(known(yes, {attribute}, '{value}'))."
+                list(self.prolog.query(assert_query))
+                assert_query = (
+                    f"assertz(known(yes, {attribute}, 'wheelchair_accessible'))."
+                )
+                list(self.prolog.query(assert_query))
+                return True
+            else:
+                # Standard behavior for other preferences
+                try:
+                    # First retract any existing knowledge about this attribute
+                    retract_query = f"retractall(known(_, {attribute}, _))."
+                    list(self.prolog.query(retract_query))
+
+                    # Then assert the new knowledge
+                    assert_query = f"assertz(known(yes, {attribute}, '{value}'))."
+                    list(self.prolog.query(assert_query))
+
+                    # For debugging - log all known preferences
+                    try:
+                        debug_query = self.prolog.query("show_known.")
+                        list(debug_query)
+                        debug_query.close()
+                    except Exception as debug_e:
+                        logger.warning(f"Debug query failed: {debug_e}")
+
+                    logger.info(f"Set preference {attribute}={value}")
+                    return True
+                except Exception as e:
+                    logger.error(f"Error in Prolog query: {e}")
+                    raise PrologQueryError(f"Failed to set preference: {str(e)}")
         except Exception as e:
             logger.error(f"Error setting preference: {e}")
             raise PrologQueryError(f"Failed to set preference: {str(e)}")
 
     def get_recommendations(self):
+        """Return recommendations based on current preferences"""
         if not self.kb_loaded or not self.prolog:
             raise KnowledgeBaseError("Knowledge base not loaded")
 
-        # Query for recommendations
         try:
-            # Use a more careful approach to handle query results
-            query = self.prolog.query(
-                "recommend(X).", maxresult=50
-            )  # Increased to capture more results
-            recommendations = []
+            # Get all attractions first
+            all_query = self.prolog.query(
+                "attraction(Name, _, _, _, _, _, _, _, _, _, Desc, Link)."
+            )
+            attractions = []
 
             try:
-                for r in query:
-                    attraction_name = str(r["X"]).replace("_", " ").title()
-                    recommendations.append(attraction_name)
-            finally:
-                # Always make sure to close the query to prevent "nested query" errors
-                query.close()
+                for r in all_query:
+                    name = str(r["Name"]).replace("_", " ").title()
+                    desc = str(r.get("Desc", ""))
+                    link = str(r.get("Link", ""))
 
-            # Remove duplicates while preserving order
+                    # Add to all attractions
+                    attractions.append(
+                        {
+                            "name": name,
+                            "description": desc,
+                            "link": link,
+                            "location": "San Francisco, CA",
+                            "maps_url": f"https://www.google.com/maps/search/?api=1&query={name.replace(' ', '%20')},%20San%20Francisco,%20CA",
+                        }
+                    )
+            finally:
+                all_query.close()
+
+            # Now filter using our preferences
+            filtered = []
+            for attraction in attractions:
+                attraction_name = attraction["name"].lower().replace(" ", "_")
+                try:
+                    # Check if this attraction is recommended
+                    check_query = f"recommend('{attraction_name}')."
+                    results = list(self.prolog.query(check_query))
+                    if results:  # If any results, it's recommended
+                        filtered.append(attraction)
+                except Exception as e:
+                    logger.warning(
+                        f"Error checking recommendation for {attraction_name}: {e}"
+                    )
+
+            # Remove duplicates by name
             seen = set()
-            unique_recommendations = []
-            for item in recommendations:
-                if item not in seen:
-                    seen.add(item)
-                    unique_recommendations.append(item)
+            unique_attractions = []
+            for item in filtered:
+                if item["name"] not in seen:
+                    seen.add(item["name"])
+                    unique_attractions.append(item)
 
             # Limit to 10 recommendations
-            unique_recommendations = unique_recommendations[:10]
+            unique_attractions = unique_attractions[:10]
 
-            logger.info(f"Found {len(unique_recommendations)} unique recommendations")
+            logger.info(f"Found {len(unique_attractions)} unique recommendations")
             return {
-                "recommendations": unique_recommendations,
+                "recommendations": unique_attractions,
                 "preferences": self.user_preferences,
             }
         except Exception as e:
@@ -427,7 +497,7 @@ show_known.
             try:
                 # Clear all known facts
                 retract_query = "retractall(known(_, _, _))."
-                result = list(self.prolog.query(retract_query)) # noqa
+                result = list(self.prolog.query(retract_query))  # noqa
                 self.user_preferences = {}
                 logger.info("Session reset successfully")
                 return True
@@ -485,10 +555,13 @@ def set_preference():
         # Set preference
         success = sessions[session_id].set_preference(attribute, value)
         if success:
+            print("Preference set successfully", attribute, value, session_id, success)
             return jsonify({"success": True})
         else:
+            print("Failed to set preference", attribute, value, session_id, success)
             return jsonify({"error": "Failed to set preference"}), 500
     except Exception as e:
+        print(f"Error in set_preference: {e}")
         logger.error(f"Error in set_preference: {e}", exc_info=True)
         return jsonify({"error": f"Failed to set preference: {str(e)}"}), 500
 

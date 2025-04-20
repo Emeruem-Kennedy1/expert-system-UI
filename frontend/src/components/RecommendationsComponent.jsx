@@ -8,16 +8,26 @@ import {
   Tag,
   Empty,
   Space,
+  Tooltip,
 } from "antd";
-import { ReloadOutlined, EnvironmentOutlined } from "@ant-design/icons";
+import {
+  ReloadOutlined,
+  EnvironmentOutlined,
+  LinkOutlined,
+} from "@ant-design/icons";
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 const RecommendationsComponent = ({
   recommendations,
   preferences,
   handleReset,
 }) => {
+  // Remove duplicate recommendations by name
+  const uniqueRecommendations = Array.from(
+    new Map(recommendations.map((item) => [item.name, item])).values()
+  );
+
   // Format attribute name (e.g., "attraction_type" -> "Attraction Type")
   const formatAttribute = (attr) => {
     return attr
@@ -32,13 +42,6 @@ const RecommendationsComponent = ({
       .split("_")
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
-  };
-
-  // Generate Google Maps link for an attraction
-  const getGoogleMapsLink = (attraction) => {
-    // Encode the attraction name for URL
-    const query = encodeURIComponent(`${attraction}, San Francisco, CA`);
-    return `https://www.google.com/maps/search/?api=1&query=${query}`;
   };
 
   // Get tag color based on attribute
@@ -60,19 +63,19 @@ const RecommendationsComponent = ({
 
   return (
     <Card className="recommendations-card">
-      {recommendations.length > 0 ? (
+      {uniqueRecommendations.length > 0 ? (
         <>
           <Title level={4}>Recommended Attractions</Title>
           <List
             itemLayout="horizontal"
-            dataSource={recommendations}
+            dataSource={uniqueRecommendations}
             renderItem={(item, index) => (
               <List.Item
                 actions={[
                   <Button
                     type="link"
                     icon={<EnvironmentOutlined />}
-                    href={getGoogleMapsLink(item)}
+                    href={item.maps_url}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -88,14 +91,30 @@ const RecommendationsComponent = ({
                   }
                   title={
                     <a
-                      href={getGoogleMapsLink(item)}
+                      href={item.maps_url}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      {item}
+                      {item.name}
                     </a>
                   }
-                  description={`Recommendation #${index + 1}`}
+                  description={
+                    <>
+                      <Text type="secondary">Recommendation #{index + 1}</Text>
+                      {item.description && (
+                        <Paragraph
+                          ellipsis={{
+                            rows: 2,
+                            expandable: true,
+                            symbol: "more",
+                          }}
+                          style={{ marginTop: "4px", marginBottom: 0 }}
+                        >
+                          {item.description}
+                        </Paragraph>
+                      )}
+                    </>
+                  }
                 />
               </List.Item>
             )}
